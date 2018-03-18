@@ -1,0 +1,51 @@
+
+
+Some mystery still remains.
+
+1. b is a byte from a buffer, and s is a string
+s+=string(b)
+and length(s) may not equal to length(buffer). 
+why ??
+
+2. shall I treat "pieces" differently ??
+
+
+```golang
+package main
+
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+
+	"github.com/eminom/gobencode"
+)
+
+func main() {
+	log.SetFlags(log.Lshortfile)
+	filename := "1000.torrent"
+	chunk, err := ioutil.ReadFile(filename)
+	if err != nil {
+		panic(err)
+	}
+
+	node, left := bencode.Scan(chunk)
+	if len(left) > 0 {
+		fmt.Printf("warning: still some left\n")
+	}
+	// bencode.PrintNode(node, 0)
+	// fmt.Println()
+	// bencode.PrintTorrent(node)
+
+	rawFile := "1d94f21f346532936f3fea2171d067ef_165612kxnnibu2i7ibmml7.jpg"
+	t := bencode.NewTorrent(node.AsMap()["info"].AsMap())
+
+	verified, err := t.VerifyFile(rawFile)
+	if err != nil {
+		panic(err)
+	}
+
+	log.Printf("verified: %v", verified)
+}
+
+```
