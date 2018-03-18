@@ -3,13 +3,15 @@ package bencode
 //https://en.wikipedia.org/wiki/Torrent_file#Single_file
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 )
 
 const (
-	BNodeMap = iota
+	BNodeInvalidType = iota
+	BNodeMap
 	BNodeString
 	BNodeList
 	BNodeInteger
@@ -19,11 +21,48 @@ const (
 type BNode struct {
 	Map    map[string]BNode
 	Str    *string
-	Int    *int
+	Int    *int64
 	List   []BNode
 	Binary []byte
 
 	Cat int
+}
+
+var TypeError = errors.New("error type")
+
+func (b BNode) AsList() []BNode {
+	if b.Cat != BNodeList {
+		panic(TypeError)
+	}
+	return b.List
+}
+
+func (b BNode) AsMap() map[string]BNode {
+	if b.Cat != BNodeMap {
+		panic(TypeError)
+	}
+	return b.Map
+}
+
+func (b BNode) AsInt() int64 {
+	if b.Cat != BNodeInteger {
+		panic(TypeError)
+	}
+	return *b.Int
+}
+
+func (b BNode) AsString() string {
+	if b.Cat != BNodeString {
+		panic(TypeError)
+	}
+	return *b.Str
+}
+
+func (b BNode) AsBinary() []byte {
+	if b.Cat != BNodeBinary {
+		panic(TypeError)
+	}
+	return b.Binary
 }
 
 func PrintTorrent(root BNode) {
@@ -35,7 +74,7 @@ func PrintTorrent(root BNode) {
 		for _, name := range file.Map["path"].List {
 			pathes = append(pathes, *name.Str)
 		}
-		pathstr := strings.Join(pathes, ",")
+		pathstr := strings.Join(pathes, "/")
 		fmt.Printf("%v, length=%v\n", pathstr, length)
 	}
 
@@ -172,7 +211,7 @@ func scanBinaryString(raw []byte) ([]byte, []byte) {
 	return raw[i : i+length], raw[i+length:]
 }
 
-func scanInteger(raw []byte) (int, []byte) {
+func scanInteger(raw []byte) (int64, []byte) {
 	//defer fmt.Println("integer")
 	var str string
 	i := 0
@@ -183,7 +222,7 @@ func scanInteger(raw []byte) (int, []byte) {
 	if raw[i] != 'e' {
 		panic("Expecting an `e' for integer")
 	}
-	v, err := strconv.Atoi(str)
+	v, err := strconv.ParseInt(str, 10, 64)
 	if err != nil {
 		panic(err)
 	}
