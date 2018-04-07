@@ -65,28 +65,6 @@ func (b BNode) AsBinary() []byte {
 	return b.Binary
 }
 
-func PrintTorrent(root BNode) {
-	info := root.Map["info"]
-	files := info.Map["files"]
-	for _, file := range files.List {
-		length := *file.Map["length"].Int
-		var pathes []string
-		for _, name := range file.Map["path"].List {
-			pathes = append(pathes, *name.Str)
-		}
-		pathstr := strings.Join(pathes, "/")
-		fmt.Printf("%v, length=%v\n", pathstr, length)
-	}
-
-	pieceLength := *info.Map["piece length"].Int
-	fmt.Printf("piece length is %v\n", pieceLength)
-
-	pieces := info.Map["pieces"].Binary
-	pieceBinLength := len(pieces)
-	fmt.Printf("piece sha1 length:%v\n", pieceBinLength)
-	fmt.Printf("blocks count: %v(%v)\n", pieceBinLength/20, float64(pieceBinLength)/20.0)
-}
-
 func PrintNode(node BNode, indent int) {
 	switch node.Cat {
 	case BNodeBinary:
