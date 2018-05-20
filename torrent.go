@@ -22,13 +22,24 @@ import (
 )
 
 var (
-	NotLongEnough = errors.New("shorter than piece length")
+	NotLongEnoughError   = errors.New("shorter than piece length")
+	FileNotIncludedError = errors.New("file not included in file list")
 )
 
 const (
-	PRINT_HASHES               = false
-	ENABLE_BY_SINGLE_FILE_HASH = false
+	PRINT_HASHES = false
 )
+
+var (
+	ENABLE_BY_SINGLE_FILE_HASH = true
+)
+
+func SetSingleHashEnabled(enabled bool) {
+	ENABLE_BY_SINGLE_FILE_HASH = enabled
+	if enabled {
+		log.Printf("single-hash enabled")
+	}
+}
 
 type Torrent struct {
 	info map[string]BNode
@@ -104,14 +115,7 @@ func (t *Torrent) GetTotalLength() int64 {
 }
 
 // return if hash exists/ verified ok
-func (t *Torrent) tryVerifyByHashInfo(idx int, filename string) (bool, bool, error) {
-	if idx < 0 {
-		return false, false, nil
-	}
-	if !ENABLE_BY_SINGLE_FILE_HASH {
-		return false, false, nil
-	}
-
+func (t *Torrent) tryVerifyByHashInfo(idx int, filename string) (bool, error) {
 	// log.Printf("Index = %v\n", idx)
 	// log.Printf("%v\n", t.info["files"].AsList()[idx])
 	fi := t.info["files"].AsList()[idx].AsMap()
@@ -119,7 +123,7 @@ func (t *Torrent) tryVerifyByHashInfo(idx int, filename string) (bool, bool, err
 		// log.Printf("file has a hash value.")
 		chunk, err := ioutil.ReadFile(filename)
 		if err != nil {
-			return true, false, err
+			return false, err
 		}
 
 		if PRINT_HASHES {
@@ -130,15 +134,15 @@ func (t *Torrent) tryVerifyByHashInfo(idx int, filename string) (bool, bool, err
 
 		fileHash := []byte(fi["filehash"].AsString())
 		for _, h := range []hash.Hash{md5.New(), sha1.New(), sha256.New()} {
-			b := GetHash(h, chunk)
+			b := getHash(h, chunk)
 			if 0 == bytes.Compare(b, fileHash) {
 				log.Printf("verified by file-hash: %T", h)
-				return true, true, nil
+				return true, nil
 			}
 		}
 		//log.Printf("<%v>", hex.EncodeToString())
 	}
-	return false, false, nil
+	return false, nil
 }
 
 // verify single file. do not verify all.
@@ -149,16 +153,18 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 	}
 
 	idx := locateIndex(t.info, filename, stat.Size())
-	hashExists, hashVerified, hErr := t.tryVerifyByHashInfo(idx, filename)
-	if nil == hErr && hashExists && hashVerified {
-		return true, nil
-	}
 	if idx < 0 {
-		return false, fmt.Errorf("not enrolled in file list")
+		return false, FileNotIncludedError
+	}
+
+	if ENABLE_BY_SINGLE_FILE_HASH {
+		hashOK, _ := t.tryVerifyByHashInfo(idx, filename)
+		if hashOK {
+			return true, nil
+		}
 	}
 
 	fileInfos := t.info["files"].AsList()
-
 	thisFileInfo := t.info["files"].AsList()[idx].AsMap()
 
 	var lengthBefore int64
@@ -173,7 +179,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 
 	thisLength := thisFileInfo["length"].AsInt()
 	if pieceLength > thisLength {
-		return false, NotLongEnough
+		return false, NotLongEnoughError
 	}
 
 	startBlock := int(lengthBefore / pieceLength)
@@ -248,6 +254,20 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 	log.Printf("passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
 	log.Printf("%v in all", totCount)
 	return notOkPiece == 0, nil
+}
+
+func (t *Torrent) GetFileList() []string {
+	fileInfos := t.info["files"].AsList()
+	var rvs []string
+	for _, v := range fileInfos {
+		pathlist := v.AsMap()["path"].AsList()
+		var ps []string
+		for _, p := range pathlist {
+			ps = append(ps, p.AsString())
+		}
+		rvs = append(rvs, strings.Join(ps, "/"))
+	}
+	return rvs
 }
 
 func (t *Torrent) VerifyAll() (bool, error) {
@@ -401,7 +421,7 @@ func PrintHash(h hash.Hash, chunk []byte, name string) {
 	log.Printf("%v para este: %v", name, hex.EncodeToString(hashed))
 }
 
-func GetHash(h hash.Hash, data []byte) []byte {
+func getHash(h hash.Hash, data []byte) []byte {
 	h.Write(data)
 	return h.Sum(nil)
 }

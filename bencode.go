@@ -2,9 +2,14 @@ package bencode
 
 //https://en.wikipedia.org/wiki/Torrent_file#Single_file
 
+//BEP Specification
+//http://bittorrent.org/beps/bep_0003.html
+
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 )
@@ -28,7 +33,11 @@ type BNode struct {
 	Cat int
 }
 
-var TypeError = errors.New("error type")
+var (
+	TypeError       = errors.New("error type")
+	TypeStringError = errors.New("not a string type")
+	RemainsError    = errors.New("error extra bytes")
+)
 
 func (b BNode) AsList() []BNode {
 	if b.Cat != BNodeList {
@@ -156,9 +165,9 @@ func scanString(raw []byte) (string, []byte) {
 		lenS += string(raw[i])
 	}
 	if raw[i] != ':' {
-		fmt.Printf("lenS = <%v>\n", lenS)
-		fmt.Printf("%v\n", string(raw))
-		panic("not a : for string")
+		// fmt.Printf("lenS = <%v>\n", lenS)
+		// fmt.Printf("%v\n", string(raw))
+		panic(TypeStringError)
 	}
 	i++
 	length, err := strconv.Atoi(lenS)
@@ -209,27 +218,28 @@ func scanInteger(raw []byte) (int64, []byte) {
 
 func Scan(raw []byte) (BNode, []byte) {
 	//defer fmt.Println("Scan")
+	lookahead := raw[0]
 	switch {
-	case 'd' == raw[0]:
+	case 'd' == lookahead:
 		dict, nRaw := scanMap(raw[1:])
 		return BNode{
 			Map: dict,
 			Cat: BNodeMap,
 		}, nRaw
-	case 'l' == raw[0]:
+	case 'l' == lookahead:
 		lst, nRaw := scanList(raw[1:])
 		return BNode{
 			List: lst,
 			Cat:  BNodeList,
 		}, nRaw
-	case isDigit(raw[0]):
+	case isDigit(lookahead):
 		str, nRaw := scanString(raw)
 		return BNode{
 			Str: &str,
 			Cat: BNodeString,
 		}, nRaw
 
-	case 'i' == raw[0]:
+	case 'i' == lookahead:
 		v, nRaw := scanInteger(raw[1:])
 		return BNode{
 			Int: &v,
@@ -237,6 +247,16 @@ func Scan(raw []byte) (BNode, []byte) {
 		}, nRaw
 	default:
 		fmt.Printf("raw reset:(%v) %v\n", len(raw), string(raw))
-		panic(fmt.Errorf("unknown format:<%v>", raw[0]))
+		panic(fmt.Errorf("unknown format:<%v>", lookahead))
 	}
+}
+
+func MustScan(raw []byte) BNode {
+	rv, remains := Scan(raw)
+	if len(remains) != 0 {
+		log.Printf("must-scan bencode: %v byte(s) remain", len(remains))
+		log.Printf("[%v]", hex.EncodeToString(remains))
+		panic(RemainsError)
+	}
+	return rv
 }
