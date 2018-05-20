@@ -37,6 +37,9 @@ var (
 	TypeError       = errors.New("error type")
 	TypeStringError = errors.New("not a string type")
 	RemainsError    = errors.New("error extra bytes")
+
+	GeneralFormatError = errors.New("general format error")
+	StringFormatError  = errors.New("string format error")
 )
 
 func (b BNode) AsList() []BNode {
@@ -188,7 +191,7 @@ func scanBinaryString(raw []byte) ([]byte, []byte) {
 	if raw[i] != ':' {
 		fmt.Printf("lenS = <%v>\n", lenS)
 		fmt.Printf("%v\n", string(raw))
-		panic("not a : for string")
+		panic(StringFormatError)
 	}
 	i++
 	length, err := strconv.Atoi(lenS)
@@ -207,7 +210,7 @@ func scanInteger(raw []byte) (int64, []byte) {
 		i++
 	}
 	if raw[i] != 'e' {
-		panic("Expecting an `e' for integer")
+		panic(GeneralFormatError)
 	}
 	v, err := strconv.ParseInt(str, 10, 64)
 	if err != nil {
@@ -259,4 +262,8 @@ func MustScan(raw []byte) BNode {
 		panic(RemainsError)
 	}
 	return rv
+}
+
+func MustScanString(str string) BNode {
+	return MustScan([]byte(str))
 }
