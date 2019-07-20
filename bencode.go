@@ -21,6 +21,8 @@ const (
 	BNodeList
 	BNodeInteger
 	BNodeBinary
+
+	BNodeStringHex
 )
 
 type BNode struct {
@@ -77,8 +79,13 @@ func (b BNode) AsBinary() []byte {
 	return b.Binary
 }
 
-func PrintNode(node BNode, indent int) {
-	switch node.Cat {
+func PrintNode(node BNode, cat int, indent int) {
+	switch cat {
+
+	case BNodeStringHex:
+		fmt.Printf("%v%v\n", strings.Repeat(" ", indent*2), hex.EncodeToString([]byte(*node.Str)))
+
+		//
 	case BNodeBinary:
 		fmt.Printf("%v***\n", strings.Repeat(" ", indent*2))
 	case BNodeString:
@@ -91,7 +98,7 @@ func PrintNode(node BNode, indent int) {
 		} else {
 			fmt.Printf("%v[\n", strings.Repeat(" ", indent*2))
 			for _, b := range node.List {
-				PrintNode(b, indent+1)
+				PrintNode(b, b.Cat, indent+1)
 			}
 			fmt.Printf("%v]\n", strings.Repeat(" ", indent*2))
 		}
@@ -102,11 +109,13 @@ func PrintNode(node BNode, indent int) {
 			fmt.Printf("%v{\n", strings.Repeat(" ", indent*2))
 			for k, v := range node.Map {
 				fmt.Printf("%v<%v>: ", strings.Repeat(" ", (indent+1)*2), k)
-				if v.Cat == BNodeString || v.Cat == BNodeInteger {
-					PrintNode(v, 0)
+				if BNodeString == v.Cat && ("filehash" == k || "ed2k" == k) {
+					PrintNode(v, BNodeStringHex, 0)
+				} else if v.Cat == BNodeString || v.Cat == BNodeInteger {
+					PrintNode(v, v.Cat, 0)
 				} else {
 					fmt.Printf("\n")
-					PrintNode(v, indent+2)
+					PrintNode(v, v.Cat, indent+2)
 				}
 			}
 			fmt.Printf("%v}\n", strings.Repeat(" ", indent*2))
