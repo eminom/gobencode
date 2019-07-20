@@ -88,21 +88,32 @@ func (t *Torrent) PrintSummary() {
 // 2. the last one
 func locateIndex(info map[string]BNode, filename string, size int64) int {
 	files := info["files"].AsList()
-	for idx, file := range files {
+	for index, file := range files {
 		fileinfo := file.AsMap()
 
 		paths := fileinfo["path"].AsList()
 
 		name := paths[len(paths)-1].AsString()
 		if name == filename {
-			return idx
+			return index
 		}
 
 		if path.Ext(name) == path.Ext(filename) && size == int64(fileinfo["length"].AsInt()) {
-			return idx
+			return index
 		}
 	}
 	return -1
+}
+
+func locateFile(info map[string]BNode, index int) (string, int64) {
+	fi := info["files"].AsList()[index].AsMap()
+	pathLS := fi["path"].AsList()
+	var paths []string
+	for _, el := range pathLS {
+		paths = append(paths, el.AsString())
+	}
+	length := fi["length"].AsInt()
+	return path.Join(paths...), length
 }
 
 func (t *Torrent) GetTotalLength() int64 {
@@ -152,6 +163,8 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		return false, err
 	}
 
+	log.Printf("%v", filename)
+	log.Printf("file length: %v", stat.Size())
 	idx := locateIndex(t.info, filename, stat.Size())
 	if idx < 0 {
 		return false, FileNotIncludedError
@@ -164,8 +177,11 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		}
 	}
 
+	// piece length must be placed in the front
+	pieceLength := t.info["piece length"].AsInt()
+
 	fileInfos := t.info["files"].AsList()
-	thisFileInfo := t.info["files"].AsList()[idx].AsMap()
+	thisFileInfo := fileInfos[idx].AsMap()
 
 	var lengthBefore int64
 	for i, file := range fileInfos {
@@ -174,13 +190,20 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		}
 		lengthBefore += file.AsMap()["length"].AsInt()
 	}
-	pieceLength := t.info["piece length"].AsInt()
-	pieces := t.info["pieces"].AsBinary()
 
+	// presume that prevMargin is less than 4GB
+	var prevMargin int64 = lengthBefore % pieceLength
+	pieces := t.info["pieces"].AsBinary()
 	thisLength := thisFileInfo["length"].AsInt()
-	if pieceLength > thisLength {
-		return false, NotLongEnoughError
+	var postMargin int64 = 0
+	if 0 != (lengthBefore+thisLength)%pieceLength {
+		postMargin = pieceLength - (lengthBefore+thisLength)%pieceLength
 	}
+
+	// try to load the next file
+	// if pieceLength > thisLength {
+	// 	return false, NotLongEnoughError
+	// }
 
 	startBlock := int(lengthBefore / pieceLength)
 	endBlock := int((lengthBefore + thisLength) / pieceLength)
@@ -190,6 +213,10 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 
 	psLen := int(pieceLength)
 	startOffset := int(lengthBefore) % psLen
+
+	log.Printf("starting block: %v", startBlock)
+	log.Printf("end block: %v", endBlock)
+	log.Printf("piece-length: %v", psLen)
 
 	var wg sync.WaitGroup
 
@@ -226,6 +253,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 			hash.Write(buffer)
 			result := hash.Sum(nil)
 			if bytes.Compare(that, result) == 0 {
+				log.Printf("Yes. todo")
 				passed++
 			} else if off > 0 {
 				headMissing++
@@ -251,8 +279,161 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		go doTask(i, startOffset, &okPieces, &headPiece, &tailPiece, &notOkPiece, &totCount)
 	}
 	wg.Wait()
+
+	if headPiece > 1 {
+		log.Fatal("head-piece > 1")
+	}
+	if tailPiece > 1 {
+		log.Fatal("tail-piece > 1")
+	}
+
+	//
+	if headPiece > 0 || tailPiece > 0 {
+		fm := NewFileMan()
+
+		// Processing with the head
+		if headPiece > 0 {
+			func() {
+				// make up one piece
+				var headBuff []byte
+				remainPrev := int64(prevMargin)
+				for elIdx := idx - 1; elIdx >= 0 && remainPrev > 0; elIdx-- {
+					origin, length := locateFile(t.info, elIdx)
+					that, ok := fm.Lookup(origin, length)
+					if !ok {
+						log.Printf("cannot find %v", origin)
+						return
+					}
+
+					if remainPrev >= length {
+						chunk, err := ioutil.ReadFile(that)
+						if err != nil {
+							log.Printf("cannnot read %v", that)
+							return
+						}
+						headBuff = append(chunk, headBuff...)
+					} else {
+						// Read the last remainPrev bytes only
+						fin, err := os.Open(that)
+						if err != nil {
+							log.Printf("cannot read %v", that)
+							return
+						}
+						defer fin.Close()
+						buff := make([]byte, int(remainPrev))
+						fin.ReadAt(buff, length-remainPrev)
+						fin.Close()
+						headBuff = append(buff, headBuff...)
+					}
+					remainPrev -= length
+					elIdx--
+				}
+				inFront := int(pieceLength - prevMargin)
+				frontBytes := make([]byte, inFront)
+				fin, _ := os.Open(filename)
+				defer fin.Close()
+				nRead, err := fin.Read(frontBytes)
+				if err != nil || nRead != inFront {
+					log.Printf("read front error")
+					return
+				}
+				headBuff = append(headBuff, frontBytes...)
+
+				hash := sha1.New()
+				hash.Write(headBuff)
+				result := hash.Sum(nil)
+				that := pieces[startBlock*20 : startBlock*20+20]
+				if bytes.Compare(that, result) == 0 {
+					log.Printf("head fixed successful")
+					headPiece--
+					okPieces++
+				}
+			}()
+		}
+
+		// Processing with the tail
+		if tailPiece > 0 {
+			func() {
+				var tailBuff []byte
+				remainPost := postMargin
+				for elIdx := idx + 1; elIdx < len(fileInfos) && remainPost > 0; elIdx++ {
+					origin, length := locateFile(t.info, elIdx)
+					that, ok := fm.Lookup(origin, length)
+					if !ok {
+						log.Printf("cannot find %v", origin)
+						return
+					}
+
+					log.Printf("  reading from %v", that)
+					if remainPost >= length {
+						log.Printf("    %v byte(s)", length)
+					} else {
+						log.Printf("    %v byte(s)", remainPost)
+					}
+
+					if remainPost >= length {
+						chunk, err := ioutil.ReadFile(that)
+						if err != nil {
+							log.Printf("cannot read %v", that)
+							return
+						}
+						tailBuff = append(tailBuff, chunk...)
+					} else {
+						fin, err := os.Open(that)
+						if err != nil {
+							log.Printf("cannot open %v", that)
+							return
+						}
+						defer fin.Close()
+						var buff = make([]byte, int(remainPost))
+						nRead, err := fin.Read(buff)
+						if nRead != int(remainPost) || err != nil {
+							log.Printf("read %v error", that)
+							return
+						}
+						tailBuff = append(tailBuff, buff...)
+					}
+				}
+
+				tailLength := pieceLength - postMargin
+				fin, _ := os.Open(filename)
+				defer fin.Close()
+				_, err := fin.Seek(-tailLength, 2)
+				if err != nil {
+					log.Printf("seek failed: %v", err)
+					return
+				}
+				var inRear = make([]byte, tailLength)
+				nRead, err := fin.Read(inRear)
+				if err != nil || nRead != int(tailLength) {
+					log.Printf("read failed: %v", err)
+					return
+				}
+				tailBuff = append(inRear, tailBuff...)
+				hash := sha1.New()
+				hash.Write(tailBuff)
+				result := hash.Sum(nil)
+				thatPiece := pieces[(endBlock-1)*20 : endBlock*20]
+				if bytes.Compare(result, thatPiece) == 0 {
+					log.Printf(" tail piece: %x", result)
+					log.Printf(" piece info: %v", hex.EncodeToString(thatPiece))
+
+					scratch := 20
+					if scratch > len(tailBuff) {
+						scratch = len(tailBuff)
+					}
+					log.Printf(" first %v bytes: %x", scratch, tailBuff[:scratch])
+					log.Printf("tail fix successfully")
+					tailPiece--
+					okPieces++
+				}
+			}()
+		}
+	}
+
 	log.Printf("passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
 	log.Printf("%v in all", totCount)
+
 	return notOkPiece == 0, nil
 }
 
