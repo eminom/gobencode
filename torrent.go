@@ -303,12 +303,22 @@ func (t *Torrent) fixHeadTail(okPieces, headPiece, tailPiece, notOkPiece int32,
 						log.Printf("cannot find %v", origin)
 						return
 					}
-					log.Printf("  reading %v", that)
+
+					log.Printf("  reading from %v", that)
+					if remainPrev >= length {
+						log.Printf("    %v byte(s)", length)
+					} else {
+						log.Printf("    %v byte(s)", remainPrev)
+					}
+
 					if remainPrev >= length {
 						chunk, err := ioutil.ReadFile(that)
 						if err != nil {
 							log.Printf("cannnot read %v", that)
 							return
+						}
+						if int64(len(chunk)) != length {
+							log.Printf("length expected: %v", length)
 						}
 						headBuff = append(chunk, headBuff...)
 					} else {
@@ -478,7 +488,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 	// 	return false, NotLongEnoughError
 	// }
 
-	log.Printf("## currently: passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
+	log.Printf("## Currently ##: passed:%v, head-missing:%v, tail-missing:%v, failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
 
 	if headPiece > 1 {
 		log.Fatal("head-piece > 1")
@@ -494,9 +504,9 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		pieces,
 		startBlock, endBlock)
 
-	log.Printf("passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
+	log.Printf("")
 	log.Printf("%v in all", totCount)
-
+	log.Printf("## Final ## passed:%v, head-missing:%v, tail-missing:%v, failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
 	return notOkPiece == 0 && 0 == headPiece && 0 == tailPiece, nil
 }
 
