@@ -170,11 +170,15 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		return false, FileNotIncludedError
 	}
 
+	log.Printf("File-idx<%v>", idx)
+
 	if ENABLE_BY_SINGLE_FILE_HASH {
+		log.Printf("try verifying by filehash ...")
 		hashOK, _ := t.tryVerifyByHashInfo(idx, filename)
 		if hashOK {
 			return true, nil
 		}
+		log.Printf("verifying by filehash unavailable")
 	}
 
 	// piece length must be placed in the front
@@ -249,15 +253,14 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 				buffer[read+off+j] = 0
 			}
 			that := pieces[i*20 : i*20+20]
-			hash := sha1.New()
-			hash.Write(buffer)
-			result := hash.Sum(nil)
+			result := calcSha1Hash(buffer)
 			if bytes.Compare(that, result) == 0 {
-				// log.Printf("Yes. todo")
+				// log.Printf("# <%v>piece ok: read %v, block<%v>", taskID, read, i)
 				passed++
 			} else if off > 0 {
 				headMissing++
 			} else if read+off < psLen {
+				// log.Printf("tail failed due to read+off<psLen")
 				tailMissing++
 			} else {
 				failed++
@@ -279,6 +282,9 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		go doTask(i, startOffset, &okPieces, &headPiece, &tailPiece, &notOkPiece, &totCount)
 	}
 	wg.Wait()
+	log.Printf("###################################")
+
+	log.Printf("## currently: passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
 
 	if headPiece > 1 {
 		log.Fatal("head-piece > 1")
@@ -296,7 +302,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		// Processing with the head
 		if headPiece > 0 {
 			func() {
-				log.Printf("starting fixing head ...")
+				log.Printf("## starting fixing head ...")
 				// make up one piece
 				var headBuff []byte
 				remainPrev := int64(prevMargin)
@@ -342,12 +348,10 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 				}
 				headBuff = append(headBuff, frontBytes...)
 
-				hash := sha1.New()
-				hash.Write(headBuff)
-				result := hash.Sum(nil)
+				result := calcSha1Hash(headBuff)
 				that := pieces[startBlock*20 : startBlock*20+20]
 				if bytes.Compare(that, result) == 0 {
-					log.Printf("head fixed successful")
+					log.Printf("### head fixed successful ###")
 					headPiece--
 					okPieces++
 				}
@@ -357,7 +361,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		// Processing with the tail
 		if tailPiece > 0 {
 			func() {
-				log.Printf("starting fixing tail ...")
+				log.Printf("## starting fixing tail ...")
 				var tailBuff []byte
 				remainPost := postMargin
 				for elIdx := idx + 1; elIdx < len(fileInfos) && remainPost > 0; elIdx++ {
@@ -414,20 +418,18 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 					return
 				}
 				tailBuff = append(inRear, tailBuff...)
-				hash := sha1.New()
-				hash.Write(tailBuff)
-				result := hash.Sum(nil)
+				result := calcSha1Hash(tailBuff)
 				thatPiece := pieces[(endBlock-1)*20 : endBlock*20]
 				if bytes.Compare(result, thatPiece) == 0 {
-					log.Printf(" tail piece: %x", result)
-					log.Printf(" piece info: %v", hex.EncodeToString(thatPiece))
+					log.Printf("  tail hash: %x", result)
+					// log.Printf("  piece info: %v", hex.EncodeToString(thatPiece))
 
 					scratch := 20
 					if scratch > len(tailBuff) {
 						scratch = len(tailBuff)
 					}
 					log.Printf(" first %v bytes: %x", scratch, tailBuff[:scratch])
-					log.Printf("tail fix successfully")
+					log.Printf("### tail fix successfully ###")
 					tailPiece--
 					okPieces++
 				}
@@ -609,4 +611,10 @@ func PrintHash(h hash.Hash, chunk []byte, name string) {
 func getHash(h hash.Hash, data []byte) []byte {
 	h.Write(data)
 	return h.Sum(nil)
+}
+
+func calcSha1Hash(buffer []byte) []byte {
+	hash := sha1.New()
+	hash.Write(buffer)
+	return hash.Sum(nil)
 }
