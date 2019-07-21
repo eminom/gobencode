@@ -79,6 +79,14 @@ func (b BNode) AsBinary() []byte {
 	return b.Binary
 }
 
+var (
+	VerboseLevel = 1
+)
+
+func SetVerboseLevel(newLevel int) {
+	VerboseLevel = newLevel
+}
+
 func PrintNode(node BNode, cat int, indent int) {
 	switch cat {
 
@@ -108,14 +116,23 @@ func PrintNode(node BNode, cat int, indent int) {
 		} else {
 			fmt.Printf("%v{\n", strings.Repeat(" ", indent*2))
 			for k, v := range node.Map {
-				fmt.Printf("%v<%v>: ", strings.Repeat(" ", (indent+1)*2), k)
-				if BNodeString == v.Cat && ("filehash" == k || "ed2k" == k) {
-					PrintNode(v, BNodeStringHex, 0)
-				} else if v.Cat == BNodeString || v.Cat == BNodeInteger {
-					PrintNode(v, v.Cat, 0)
-				} else {
-					fmt.Printf("\n")
-					PrintNode(v, v.Cat, indent+2)
+				for {
+					if VerboseLevel <= 1 {
+						if BNodeList == v.Cat && ("announce-list" == k || "nodes" == k) {
+							//
+							break
+						}
+					}
+					fmt.Printf("%v<%v>: ", strings.Repeat(" ", (indent+1)*2), k)
+					if BNodeString == v.Cat && ("filehash" == k || "ed2k" == k) {
+						PrintNode(v, BNodeStringHex, 0)
+					} else if v.Cat == BNodeString || v.Cat == BNodeInteger {
+						PrintNode(v, v.Cat, 0)
+					} else {
+						fmt.Printf("\n")
+						PrintNode(v, v.Cat, indent+2)
+					}
+					break
 				}
 			}
 			fmt.Printf("%v}\n", strings.Repeat(" ", indent*2))
