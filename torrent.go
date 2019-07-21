@@ -86,23 +86,49 @@ func (t *Torrent) PrintSummary() {
 // locate by name
 // 1. original name(path joined)
 // 2. the last one
-func locateIndex(info map[string]BNode, filename string, size int64) int {
-	files := info["files"].AsList()
-	for index, file := range files {
-		fileinfo := file.AsMap()
+func locateIndex(info map[string]BNode, filename string, size int64) (idx int, lengthBefore int64) {
 
-		paths := fileinfo["path"].AsList()
-
-		name := paths[len(paths)-1].AsString()
-		if name == filename {
-			return index
-		}
-
-		if path.Ext(name) == path.Ext(filename) && size == int64(fileinfo["length"].AsInt()) {
-			return index
+	if _, ok := info["files"]; !ok {
+		if size == info["length"].AsInt() {
+			return 0, 0
 		}
 	}
-	return -1
+
+	//
+	fileInfos := info["files"].AsList()
+	idx = -1
+	for index, file := range fileInfos {
+		fileinfo := file.AsMap()
+
+		// Check length if matches
+		// This must be satisfied.
+		if fileinfo["length"].AsInt() != size {
+			continue
+		}
+
+		paths := fileinfo["path"].AsList()
+		name := paths[len(paths)-1].AsString()
+		if name == filename {
+			idx = index
+			break
+		}
+
+		// not strictly
+		if path.Ext(name) == path.Ext(filename) {
+			idx = index
+			break
+		}
+	}
+
+	if idx >= 0 {
+		for i, file := range fileInfos {
+			if i >= idx {
+				break
+			}
+			lengthBefore += file.AsMap()["length"].AsInt()
+		}
+	}
+	return
 }
 
 func locateFile(info map[string]BNode, index int) (string, int64) {
@@ -156,61 +182,13 @@ func (t *Torrent) tryVerifyByHashInfo(idx int, filename string) (bool, error) {
 	return false, nil
 }
 
-// verify single file. do not verify all.
-func (t *Torrent) VerifyFile(filename string) (bool, error) {
-	stat, err := os.Stat(filename)
-	if err != nil {
-		return false, err
-	}
+func (t *Torrent) checkMain(filename string,
+	lengthBefore, thisLength, pieceLength int64, pieces []byte) (
+	okPieces, headPiece, tailPiece,
+	notOkPiece, totCount int32, startBlock, endBlock int) {
 
-	log.Printf("%v", filename)
-	log.Printf("file length: %v", stat.Size())
-	idx := locateIndex(t.info, filename, stat.Size())
-	if idx < 0 {
-		return false, FileNotIncludedError
-	}
-
-	log.Printf("File-idx<%v>", idx)
-
-	if ENABLE_BY_SINGLE_FILE_HASH {
-		log.Printf("try verifying by filehash ...")
-		hashOK, _ := t.tryVerifyByHashInfo(idx, filename)
-		if hashOK {
-			return true, nil
-		}
-		log.Printf("verifying by filehash unavailable")
-	}
-
-	// piece length must be placed in the front
-	pieceLength := t.info["piece length"].AsInt()
-
-	fileInfos := t.info["files"].AsList()
-	thisFileInfo := fileInfos[idx].AsMap()
-
-	var lengthBefore int64
-	for i, file := range fileInfos {
-		if i >= idx {
-			break
-		}
-		lengthBefore += file.AsMap()["length"].AsInt()
-	}
-
-	// presume that prevMargin is less than 4GB
-	var prevMargin int64 = lengthBefore % pieceLength
-	pieces := t.info["pieces"].AsBinary()
-	thisLength := thisFileInfo["length"].AsInt()
-	var postMargin int64 = 0
-	if 0 != (lengthBefore+thisLength)%pieceLength {
-		postMargin = pieceLength - (lengthBefore+thisLength)%pieceLength
-	}
-
-	// try to load the next file
-	// if pieceLength > thisLength {
-	// 	return false, NotLongEnoughError
-	// }
-
-	startBlock := int(lengthBefore / pieceLength)
-	endBlock := int((lengthBefore + thisLength) / pieceLength)
+	startBlock = int(lengthBefore / pieceLength)
+	endBlock = int((lengthBefore + thisLength) / pieceLength)
 	if (lengthBefore+thisLength)%pieceLength != 0 {
 		endBlock++
 	}
@@ -254,6 +232,8 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 			}
 			that := pieces[i*20 : i*20+20]
 			result := calcSha1Hash(buffer)
+
+			isTailMissing := false
 			if bytes.Compare(that, result) == 0 {
 				// log.Printf("# <%v>piece ok: read %v, block<%v>", taskID, read, i)
 				passed++
@@ -261,11 +241,22 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 				headMissing++
 			} else if read+off < psLen {
 				// log.Printf("tail failed due to read+off<psLen")
-				tailMissing++
+				isTailMissing = true
 			} else {
 				failed++
 				log.Printf("%v compared to %v", result, that)
 			}
+
+			// a second chance
+			if isTailMissing {
+				if bytes.Compare(that, calcSha1Hash(buffer[:read+off])) == 0 {
+					log.Printf("## tail fixed by incomplete buffer !##")
+					passed++
+				} else {
+					tailMissing++
+				}
+			}
+
 			blockTot++
 		}
 
@@ -276,28 +267,27 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		atomic.AddInt32(inAll, blockTot)
 	}
 
-	var okPieces, headPiece, tailPiece, notOkPiece, totCount int32
 	for i := 0; i < cpuNu; i++ {
 		wg.Add(1)
 		go doTask(i, startOffset, &okPieces, &headPiece, &tailPiece, &notOkPiece, &totCount)
 	}
 	wg.Wait()
 	log.Printf("###################################")
+	return
+}
 
-	log.Printf("## currently: passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
-
-	if headPiece > 1 {
-		log.Fatal("head-piece > 1")
-	}
-	if tailPiece > 1 {
-		log.Fatal("tail-piece > 1")
-	}
-
-	//
+func (t *Torrent) fixHeadTail(okPieces, headPiece, tailPiece, notOkPiece int32,
+	filename string,
+	idx int,
+	pieceLength int64,
+	prevMargin, postMargin int64,
+	pieces []byte,
+	startBlock, endBlock int) (int32, int32, int32, int32) {
 	if headPiece > 0 || tailPiece > 0 {
 		log.Printf("### fixing with head-piece: %v, tail-piece: %v ###", headPiece, tailPiece)
 		log.Printf("### prev-margin: %v, post-margin: %v", prevMargin, postMargin)
 		fm := NewFileMan()
+		fileInfos := t.info["files"].AsList()
 
 		// Processing with the head
 		if headPiece > 0 {
@@ -359,6 +349,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		}
 
 		// Processing with the tail
+		// One exception: there is only one file in the torrent list
 		if tailPiece > 0 {
 			func() {
 				log.Printf("## starting fixing tail ...")
@@ -437,10 +428,76 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		}
 	}
 
+	return okPieces, headPiece, tailPiece, notOkPiece
+}
+
+// verify single file. do not verify all.
+func (t *Torrent) VerifyFile(filename string) (bool, error) {
+	stat, err := os.Stat(filename)
+	if err != nil {
+		return false, err
+	}
+
+	log.Printf("%v", filename)
+	log.Printf("file length: %v", stat.Size())
+	thisLength := stat.Size()
+	idx, lengthBefore := locateIndex(t.info, filename, stat.Size())
+	if idx < 0 {
+		return false, FileNotIncludedError
+	}
+
+	log.Printf("File-idx<%v>", idx)
+
+	if ENABLE_BY_SINGLE_FILE_HASH {
+		log.Printf("try verifying by filehash ...")
+		hashOK, _ := t.tryVerifyByHashInfo(idx, filename)
+		if hashOK {
+			return true, nil
+		}
+		log.Printf("verifying by filehash unavailable")
+	}
+
+	// piece length must be placed in the front
+	pieceLength := t.info["piece length"].AsInt()
+
+	// presume that prevMargin is less than 4GB
+	var prevMargin int64 = lengthBefore % pieceLength
+	pieces := t.info["pieces"].AsBinary()
+	var postMargin int64 = 0
+	if 0 != (lengthBefore+thisLength)%pieceLength {
+		postMargin = pieceLength - (lengthBefore+thisLength)%pieceLength
+	}
+
+	okPieces, headPiece, tailPiece,
+		notOkPiece, totCount,
+		startBlock, endBlock := t.checkMain(filename, lengthBefore,
+		thisLength, pieceLength, pieces)
+
+	// try to load the next file
+	// if pieceLength > thisLength {
+	// 	return false, NotLongEnoughError
+	// }
+
+	log.Printf("## currently: passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
+
+	if headPiece > 1 {
+		log.Fatal("head-piece > 1")
+	}
+	if tailPiece > 1 {
+		log.Fatal("tail-piece > 1")
+	}
+
+	//
+	okPieces, headPiece, tailPiece, notOkPiece = t.fixHeadTail(okPieces, headPiece, tailPiece, notOkPiece,
+		filename, idx, pieceLength,
+		prevMargin, postMargin,
+		pieces,
+		startBlock, endBlock)
+
 	log.Printf("passed:%v head-missing:%v tail-missing:%v failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
 	log.Printf("%v in all", totCount)
 
-	return notOkPiece == 0, nil
+	return notOkPiece == 0 && 0 == headPiece && 0 == tailPiece, nil
 }
 
 func (t *Torrent) GetFileList() []string {
