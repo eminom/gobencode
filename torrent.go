@@ -30,6 +30,10 @@ const (
 	PRINT_HASHES = false
 )
 
+const (
+	SINGLE_THREAD = true
+)
+
 var (
 	ENABLE_BY_SINGLE_FILE_HASH = true
 )
@@ -203,6 +207,10 @@ func (t *Torrent) checkMain(filename string,
 	var wg sync.WaitGroup
 
 	cpuNu := runtime.NumCPU()
+	if SINGLE_THREAD {
+		log.Printf("using single thread")
+		cpuNu = 1
+	}
 	// taskID range: 0 ~ cpuNu-1
 	doTask := func(taskID int, rOff int, pPassed, pMissHead, pMissTail, pFailed, inAll *int32) {
 		defer wg.Done()
@@ -233,6 +241,42 @@ func (t *Torrent) checkMain(filename string,
 			that := pieces[i*20 : i*20+20]
 			result := calcSha1Hash(buffer)
 
+			//
+			for {
+				if failed > 10 {
+					if bytes.Compare(that, result) == 0 {
+						break
+					}
+					log.Printf("try md5 for each piece")
+					res1 := calcMd5Hash(buffer)
+					if bytes.Compare(that, res1) == 0 {
+						log.Fatalf("md5 seesm to be the right choice....")
+					}
+					log.Printf("try sha256 for each piece")
+					res2 := calcSha256Hash(buffer)
+					if bytes.Compare(that, res2) == 0 {
+						log.Fatalf("sha256 seems to be the right choice...")
+					}
+
+					log.Printf("dump info:")
+					log.Printf("bytes-array for pieces(in bytes): %v", len(pieces))
+					if len(pieces)%20 != 0 {
+						log.Printf("cannot be divided by 20")
+					}
+					pieceCount := len(pieces) / 20
+					log.Printf("piece count: %v", pieceCount)
+
+					log.Printf("length for each-piece: %v", pieceLength)
+					volumeForFiles := pieceLength * int64(pieceCount)
+					fileVol := t.GetTotalLength()
+					log.Printf("volume: %v", volumeForFiles)
+					log.Printf("all files: %v byte(s)", fileVol)
+					log.Printf("margin percent: %.2f%%", float64(volumeForFiles-fileVol)/float64(volumeForFiles)*100.0)
+					log.Fatalf("too many errors")
+				}
+				break
+			}
+
 			isTailMissing := false
 			if bytes.Compare(that, result) == 0 {
 				// log.Printf("# <%v>piece ok: read %v, block<%v>", taskID, read, i)
@@ -241,6 +285,7 @@ func (t *Torrent) checkMain(filename string,
 				headMissing++
 			} else if read+off < psLen {
 				// log.Printf("tail failed due to read+off<psLen")
+				log.Printf("encounter tail. read %v byte(s)", read)
 				isTailMissing = true
 			} else {
 				failed++
@@ -684,4 +729,16 @@ func calcSha1Hash(buffer []byte) []byte {
 	hash := sha1.New()
 	hash.Write(buffer)
 	return hash.Sum(nil)
+}
+
+func calcMd5Hash(buffer []byte) []byte {
+	hash := md5.New()
+	hash.Write(buffer)
+	return hash.Sum(nil)
+}
+
+func calcSha256Hash(buffer []byte) []byte {
+	hash := sha256.New()
+	hash.Write(buffer)
+	return hash.Sum(buffer)
 }
