@@ -253,7 +253,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 			hash.Write(buffer)
 			result := hash.Sum(nil)
 			if bytes.Compare(that, result) == 0 {
-				log.Printf("Yes. todo")
+				// log.Printf("Yes. todo")
 				passed++
 			} else if off > 0 {
 				headMissing++
@@ -289,11 +289,14 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 
 	//
 	if headPiece > 0 || tailPiece > 0 {
+		log.Printf("### fixing with head-piece: %v, tail-piece: %v ###", headPiece, tailPiece)
+		log.Printf("### prev-margin: %v, post-margin: %v", prevMargin, postMargin)
 		fm := NewFileMan()
 
 		// Processing with the head
 		if headPiece > 0 {
 			func() {
+				log.Printf("starting fixing head ...")
 				// make up one piece
 				var headBuff []byte
 				remainPrev := int64(prevMargin)
@@ -304,7 +307,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 						log.Printf("cannot find %v", origin)
 						return
 					}
-
+					log.Printf("  reading %v", that)
 					if remainPrev >= length {
 						chunk, err := ioutil.ReadFile(that)
 						if err != nil {
@@ -354,6 +357,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 		// Processing with the tail
 		if tailPiece > 0 {
 			func() {
+				log.Printf("starting fixing tail ...")
 				var tailBuff []byte
 				remainPost := postMargin
 				for elIdx := idx + 1; elIdx < len(fileInfos) && remainPost > 0; elIdx++ {
