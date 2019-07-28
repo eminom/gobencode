@@ -31,7 +31,7 @@ const (
 )
 
 const (
-	SINGLE_THREAD = true
+	SINGLE_THREAD = false
 )
 
 var (
@@ -224,7 +224,7 @@ func (t *Torrent) checkMain(filename string,
 		var passed, headMissing, tailMissing, failed int32
 		var blockTot int32
 		for i := startBlock + taskID; i < endBlock; i += cpuNu {
-			off, readPos := 0, int64(i)*pieceLength
+			off, readPos := 0, int64(i-startBlock)*pieceLength
 			if i != startBlock {
 				readPos -= int64(rOff)
 			} else {
@@ -286,6 +286,8 @@ func (t *Torrent) checkMain(filename string,
 			} else if read+off < psLen {
 				// log.Printf("tail failed due to read+off<psLen")
 				log.Printf("encounter tail. read %v byte(s)", read)
+				log.Printf("readPos = %v", readPos)
+				log.Printf("off = %v", off)
 				isTailMissing = true
 			} else {
 				failed++
