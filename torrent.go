@@ -554,6 +554,7 @@ func (t *Torrent) VerifyFile(filename string) (bool, error) {
 	log.Printf("")
 	log.Printf("%v in all", totCount)
 	log.Printf("## Final ## passed:%v, head-missing:%v, tail-missing:%v, failed:%v", okPieces, headPiece, tailPiece, notOkPiece)
+	log.Printf("## %.2f%% ##", 100.0*float64(okPieces)/float64(totCount))
 	return notOkPiece == 0 && 0 == headPiece && 0 == tailPiece, nil
 }
 
